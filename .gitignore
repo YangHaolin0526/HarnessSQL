@@ -1,0 +1,49 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credential*.json
+
+# Python / Node
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+node_modules/
+
+# Generated datasets, databases, trajectories, checkpoints, and logs
+artifacts/
+data/
+datasets/
+databases/
+runs/
+outputs/
+logs/
+checkpoints/
+models/
+*.sqlite
+*.sqlite3
+*.duckdb
+*.db
+*.jsonl
+*.zst
+*.zstd
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.sqsh
+*.log
+*.pid
+
+# Build/editor files
+build/
+dist/
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/

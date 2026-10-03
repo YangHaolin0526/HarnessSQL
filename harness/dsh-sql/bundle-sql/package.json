@@ -1,0 +1,7 @@
+{
+  "name": "dsh-bundle-sql",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

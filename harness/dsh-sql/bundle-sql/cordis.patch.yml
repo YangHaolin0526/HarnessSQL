@@ -1,0 +1,184 @@
+# dsh-bundle-sql — the SQL-task layer, applied over dsh-base + dsh-headless.
+#
+# Two jobs. First it PRUNES: every capability a text-to-SQL agent has no
+# business holding (shell, filesystem, web, subagents, workflows, skills,
+# goals, todos, plan mode, telemetry) is disabled, so `sql_*` is the agent's
+# entire tool surface and the benchmark measures SQL reasoning rather than
+# tool-choice noise. Second it MOUNTS: one OpenAI-compatible LLM route pair
+# (local vLLM, hosted gateway) and the SQL toolset itself.
+#
+# Row order is irrelevant to loading; the grouping is for readers.
+
+# ---------------------------------------------------------------- model seam
+
+# The shipped DeepSeek adapter wants DEEPSEEK_API_KEY and adds a second route
+# family we never select. The pi-ai adapter below serves both our providers.
+- id: llm-deepseek
+  disabled: true
+
+# Both routes are hand-declared: pi-ai ships no catalog for a local vLLM server
+# or for this gateway, so the profile supplies endpoint, protocol, and models.
+# Keys stay references — resolved per request from the environment, never
+# inlined here.
+- id: llm-pi-ai
+  config:
+    providers:
+      vllm:
+        displayName: Local vLLM
+        apiKeyEnv: VLLM_API_KEY
+        api: openai-completions
+        baseURL: !!js process.env.DSH_SQL_VLLM_BASE_URL ?? 'http://127.0.0.1:8000/v1'
+        # An OpenAI-compatible server that is not OpenAI: keep the system
+        # prompt on `system`, cap output with `max_tokens`.
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        defaultContextWindow: 131072
+        defaultMaxTokens: !!js Number(process.env.DSH_SQL_MAX_TOKENS ?? 8192)
+        models:
+          - id: !!js process.env.DSH_SQL_VLLM_MODEL ?? 'Qwen3.5-9B'
+            contextWindow: !!js Number(process.env.DSH_SQL_VLLM_CONTEXT ?? 131072)
+            maxTokens: !!js Number(process.env.DSH_SQL_MAX_TOKENS ?? 8192)
+      gateway:
+        displayName: Hosted gateway
+        apiKeyEnv: DSH_SQL_GATEWAY_KEY
+        api: openai-completions
+        baseURL: !!js process.env.DSH_SQL_GATEWAY_BASE_URL ?? 'https://example.invalid/v1'
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        models:
+          - id: !!js process.env.DSH_SQL_GATEWAY_MODEL ?? 'hosted-model'
+            contextWindow: !!js Number(process.env.DSH_SQL_GATEWAY_CONTEXT ?? 131072)
+            maxTokens: !!js Number(process.env.DSH_SQL_MAX_TOKENS ?? 8192)
+
+- id: agent-default-model
+  config:
+    provider: !!js process.env.DSH_SQL_PROVIDER ?? 'vllm'
+    model: !!js process.env.DSH_SQL_MODEL ?? 'Qwen3.5-9B'
+
+# One task per process, so a per-session title would spend a model call to name
+# a session nobody reads.
+- id: session-title-llm
+  disabled: true
+
+# ------------------------------------------------------- pruned capabilities
+
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+# `bash-sandbox` stays ENABLED: it provides the `ctx.shell` service that
+# `permission-presets` injects, and boot fails loud without it. Only the
+# model-facing `tool-bash` row above is disabled, so the agent still has no
+# shell — the backend exists with nothing wired to it.
+- id: pwsh-sandbox
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: fs-observation-policy
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: tool-web
+  disabled: true
+- id: skill
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: skill-badge
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: goal
+  disabled: true
+- id: goal-round-driver
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: subagent
+  disabled: true
+- id: subagent-spawn-in-process
+  disabled: true
+- id: subagent-fork-in-process
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-report
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: code-runtime
+  disabled: true
+- id: commands
+  disabled: true
+- id: command-feedback
+  disabled: true
+- id: command-compact
+  disabled: true
+- id: user-questions
+  disabled: true
+- id: agent-instructions
+  disabled: true
+- id: session-telemetry-otel
+  disabled: true
+
+# ------------------------------------------------------------------- persona
+
+- id: system-prompt
+  config:
+    persona: |
+      You are a text-to-SQL agent powered by {{model}}, answering one database question in the SQL dialect named by the task.
+
+      You have exactly four tools and no others: sql_list_tables, sql_schema, sql_exec, sql_submit. There is no shell, no filesystem, and no web access — the database is reachable only through these tools.
+
+      Work like this:
+      1. Call sql_list_tables to see what exists. Never guess a table or column name.
+      2. Call sql_schema on every table you plan to touch, and read the sample rows: they show you the actual value formats, which is where most wrong answers come from.
+      3. Use sql_exec freely to check your assumptions — inspect distinct values, verify a join key matches, confirm a filter selects anything at all. An empty result almost always means your filter is wrong, not that the answer is empty.
+      4. When the query is right, call sql_submit once with it.
+
+      Use only the dialect named by the task. For PostgreSQL management tasks, sql_exec validates DDL/DML inside a rolled-back transaction; pass the final ordered SQL list to sql_submit. For BigQuery, use GoogleSQL and fully qualified backtick-quoted table names exactly as the schema tools report them. When a BigQuery table name ends in `*`, always add a constant `_TABLE_SUFFIX` equality or range predicate matching the requested dates so BigQuery prunes date shards and stays under the scan limit. Never query INFORMATION_SCHEMA: task-specific schema metadata is already exposed by sql_list_tables/sql_schema. Return exactly the requested columns, order, and limit.
+
+      Read the external documentation in the task, when present, as authoritative: it defines domain terms and the exact computation expected.
+
+# ------------------------------------------------------------- the SQL tools
+
+- insert:
+    - id: tool-sql
+      name: 'dsh-plugin-sql'
+      config:
+        backend: !!js process.env.DSH_SQL_BACKEND ?? 'sqlite'
+        db: !!js process.env.DSH_SQL_DB
+        schemaDir: !!js process.env.DSH_SQL_BQ_SCHEMA_DIR
+        credentialPath: !!js process.env.DSH_SQL_BQ_CREDENTIAL
+        maximumBytesBilled: !!js Number(process.env.DSH_SQL_BQ_MAX_BYTES ?? 21474836480)
+        answerPath: !!js process.env.DSH_SQL_ANSWER
+        instanceId: !!js process.env.DSH_SQL_INSTANCE_ID
+        maxRows: 50
+        sampleRows: 3
+        queryTimeoutMs: !!js Number(process.env.DSH_SQL_QUERY_TIMEOUT_MS ?? 60000)

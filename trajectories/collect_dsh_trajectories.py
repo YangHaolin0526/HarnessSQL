@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Multi-seed Trajectory Synthesizer for 1800 Synthetic SQL Tasks using DSH-SQL.
+"""Collect and select multi-seed dsh-sql trajectories for a JSON task set.
 
 Features:
-1. Loads 1800 tasks from omnisql_synth1800_reforce.json.
-2. Runs 3 rollouts (seeds 0, 1, 2) per question at temperature 0.7.
+1. Loads any number of ``instance_id``/``db_id``/``question`` tasks.
+2. Runs a configurable number of rollouts per question.
 3. Distributes requests across hosted API or local vLLM endpoints (load balanced).
 4. Executes and grades generated SQL against SQLite databases.
 5. Selects the verified/consensus trajectory per task.
@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 PRINT_LOCK = threading.Lock()
@@ -32,19 +32,19 @@ ENDPOINT_CYCLE = 0
 
 
 @dataclass
-class SynthTask:
+class SQLTask:
     instance_id: str
     db_id: str
     question: str
 
 
-def load_synth_tasks(task_json_path: Path, limit: int = 0) -> list[SynthTask]:
+def load_tasks(task_json_path: Path, limit: int = 0) -> list[SQLTask]:
     with open(task_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     tasks = []
     for item in data:
         tasks.append(
-            SynthTask(
+            SQLTask(
                 instance_id=item["instance_id"],
                 db_id=item["db_id"],
                 question=item["question"],
@@ -62,7 +62,7 @@ def get_next_endpoint(endpoints: list[str]) -> tuple[int, str]:
         return index, endpoints[index]
 
 
-def build_prompt(task: SynthTask) -> str:
+def build_prompt(task: SQLTask) -> str:
     return (
         f"Spider 2.0 Task {task.instance_id}. Dialect: SQLite.\n\n"
         f"Question: {task.question}\n\n"
@@ -101,7 +101,7 @@ def execute_sqlite_query(db_path: Path, sql: str, timeout: int = 15) -> tuple[bo
 
 
 def run_single_seed(
-    task: SynthTask,
+    task: SQLTask,
     seed: int,
     args,
     endpoints: list[str],
@@ -111,8 +111,6 @@ def run_single_seed(
     db_dir: Path,
 ) -> dict:
     endpoint_index, endpoint = get_next_endpoint(endpoints)
-    task_seed_id = f"{task.instance_id}_seed{seed}"
-
     seed_dir = out_dir / "seeds" / str(seed)
     logs_dir = seed_dir / "logs"
     answers_dir = seed_dir / "answers"
@@ -249,8 +247,8 @@ def run_single_seed(
     return res_item
 
 
-def process_task_3seeds(
-    task: SynthTask,
+def process_task_rollouts(
+    task: SQLTask,
     args,
     endpoints: list[str],
     out_dir: Path,
@@ -398,7 +396,7 @@ def main():
         parser.error("configure --base-urls (or --ports for local vLLM)")
 
     print("======================================================================")
-    print("DSH-SQL 1800 Synthetic Tasks Trajectory Generator (3-Seed Rollout)")
+    print("DSH-SQL Multi-Seed Trajectory Collector")
     print(f"Task File:    {args.task_file}")
     print(f"Model:        {args.model}")
     print(f"Provider:      {args.provider}")
@@ -408,14 +406,14 @@ def main():
     print(f"Output Dir:   {out_dir}")
     print("======================================================================")
 
-    tasks = load_synth_tasks(Path(args.task_file), args.limit)
-    print(f"Loaded {len(tasks)} tasks. Starting 3-seed rollout synthesis...")
+    tasks = load_tasks(Path(args.task_file), args.limit)
+    print(f"Loaded {len(tasks)} tasks. Starting {args.num_votes}-seed rollout collection...")
 
     summaries = []
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
         futures = {
-            executor.submit(process_task_3seeds, t, args, endpoints, out_dir, dsh_bin, node_bin_dir, db_dir): t for t in tasks
+            executor.submit(process_task_rollouts, t, args, endpoints, out_dir, dsh_bin, node_bin_dir, db_dir): t for t in tasks
         }
         for future in as_completed(futures):
             try:
@@ -431,7 +429,7 @@ def main():
     export_training_datasets(out_dir, summaries)
 
     # Save master summary
-    with open(out_dir / "synth1800_master_summary.json", "w", encoding="utf-8") as f:
+    with open(out_dir / "trajectory_summary.json", "w", encoding="utf-8") as f:
         json.dump(
             {
                 "total_tasks": len(tasks),

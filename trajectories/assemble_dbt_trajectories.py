@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select exactly one correct DSH trajectory per task across three seed passes."""
+"""Select one correct dsh-sql trajectory per task across any seed passes."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def main() -> int:
     selected_dir = root / "training_set/selected_sessions"
     selected_dir.mkdir(parents=True, exist_ok=True)
     train_path = root / "training_set/train.correct_trajectory_index.jsonl"
-    reject_path = root / "training_set/rejected_all_3_wrong.jsonl"
-    agreement_path = root / "training_set/three_seed_outcomes.jsonl"
+    reject_path = root / "training_set/rejected_all_wrong.jsonl"
+    agreement_path = root / "training_set/seed_outcomes.jsonl"
     kept = rejected = 0
     with train_path.open("w") as train, reject_path.open("w") as reject, agreement_path.open("w") as agreement:
         for task_id, task in sorted(tasks.items()):
@@ -59,7 +59,7 @@ def main() -> int:
                 "correct_seed_count": len(correct),
             }, ensure_ascii=False) + "\n")
             kept += 1
-    summary = {"total": len(tasks), "kept": kept, "rejected_all_3_wrong": rejected, "seeds": seeds}
+    summary = {"total": len(tasks), "kept": kept, "rejected_all_wrong": rejected, "seeds": seeds}
     (root / "training_set/summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary), flush=True)
     return 0 if kept + rejected == len(tasks) else 2

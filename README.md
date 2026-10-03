@@ -10,6 +10,10 @@ HarnessSQL is an end-to-end research codebase for harness-aware text-to-SQL:
 
 Generated data, databases, trajectories, model weights, checkpoints, credentials, and machine-specific configuration are intentionally excluded.
 
+## Overview
+
+![HarnessSQL pipeline](figs/Harness_SQL_pipeline.png)
+
 ## Repository map
 
 ```text
@@ -19,7 +23,7 @@ data_generation/
 harness/dsh-sql/    dsh bundle, SQL tools, profile, and benchmark runner
 trajectories/       multi-seed dsh-sql rollout and SFT conversion
 training/sft/       packed/split dataset assembly and supervised training
-training/rl/        Slime rollout adapter, execution reward, and data preparation
+training/rl/        production Slime training, model configs, rollout, and reward
 configs/            portable training configuration
 scripts/            local dsh-sql profile setup
 ```
@@ -62,9 +66,13 @@ python -m data_synthesis.pipeline catalog \
 
 export OPENAI_API_KEY=...
 python -m data_synthesis.question_generation \
+  --databases california_schools,card_games \
+  --count 500 \
+  --difficulty-mix foundation=.1,core=.3,growth=.35,stretch=.25 \
   --database-root /path/to/sqlite/databases \
   --catalog-dir artifacts/catalogs \
   --output-dir artifacts/blueprints \
+  --workers 8 \
   --backend openai-compatible --base-url https://your-endpoint.example/v1 --model your-model
 
 python -m data_synthesis.pipeline pilot \
@@ -74,17 +82,22 @@ python -m data_synthesis.pipeline pilot \
   --output-dir artifacts/validated
 ```
 
-API credentials are read only from environment variables. Local vLLM uses the same OpenAI-compatible backend with a loopback base URL.
+`--count` controls the total number of query tasks. `--difficulty-mix` controls the
+proportion of `foundation`, `core`, `growth`, and `stretch` tasks; the mix may be
+changed for each run. `--databases`, `--generation-profile`, structural-score
+bounds, retry counts, temperature, and worker count are also configurable. API
+credentials are read only from environment variables. Local vLLM uses the same
+OpenAI-compatible backend with a loopback base URL.
 
 ## 2. Collect dsh-sql trajectories
 
-Start vLLM, then run three seeds per synthesized task:
+Start vLLM, then collect a configurable number of seeds per task:
 
 ```bash
 MODEL_PATH=/path/to/model VLLM_PORT=8000 \
   bash harness/dsh-sql/runner/serve_vllm.sh
 
-python trajectories/dsh_synth1800_pipeline.py \
+python trajectories/collect_dsh_trajectories.py \
   --task-file /path/to/tasks.json \
   --db-dir /path/to/sqlite/databases \
   --dsh-root harness/dsh-sql \
@@ -116,27 +129,43 @@ The trainer supports `MAX_LENGTH`, `CE_CHUNK`, `USE_LIGER`, `NUM_EPOCHS`, `LR`, 
 
 ## 4. RL
 
-Prepare both task pools by setting the four `HARNESS_SQL_*` data-root variables from `.env.example`, then run:
+The complete training entrypoint is the portable version of the production
+Slime/Megatron/SGLang job. It includes the GRPO, DAPO, and GSPO profiles,
+Qwen3-8B/14B Megatron model configs, dsh-sql rollout generation, binary SQL
+execution reward, dynamic sampling filters, optimizer settings, and optional
+held-out evaluation.
+
+Prepare both task pools by setting the `HARNESS_SQL_*` variables from
+`.env.example`, then run:
 
 ```bash
 python training/rl/scripts/replay_all_oracles.py --output-dir artifacts/oracle-replay
-python training/rl/scripts/build_merged_rl_data.py --out artifacts/rl/text2sql.jsonl
+python training/rl/scripts/build_merged_rl_data.py \
+  --out artifacts/rl/text2sql.jsonl \
+  --holdout-spider2 70 --holdout-dbt 30
 ```
 
-Configure Slime with:
-
-```text
---custom-generate-function-path text2sql.generate.generate
---dynamic-sampling-filter-path text2sql.filters.check_no_aborted
-```
-
-`text2sql.generate` launches one isolated harness subprocess per sample, preserves the sampled token IDs/logprobs through an in-process OpenAI adapter, extracts the final SQL, and computes binary execution reward against hidden result hashes. See [docs/rl.md](docs/rl.md) for the runtime contract.
-
-## Security before publishing
+Launch training directly:
 
 ```bash
-git grep -nE '(/aifs4su/|/work/[^/]+|sk-[A-Za-z0-9_-]{16,})'
-git status --short
+SLIME_ROOT=/path/to/slime \
+HF_CHECKPOINT=/path/to/qwen3-sft-hf \
+REF_LOAD=/path/to/qwen3-sft-torch-dist \
+SAVE_DIR=artifacts/checkpoints/rl \
+PROMPT_DATA=artifacts/rl/text2sql.jsonl \
+MODEL_SIZE=qwen3_8b \
+ALGORITHM=dapo \
+EVAL_INTERVAL=25 \
+EVAL_DATA=artifacts/rl/text2sql.eval.jsonl \
+bash training/rl/launch_ray.sh
 ```
 
-Keep credentials in environment variables, review the staged diff, and enable GitHub secret scanning for the published repository.
+`launch_ray.sh` starts the single-node Ray runtime and submits
+`train_rl_dsh.sh`, the actual Slime training command. On Slurm, export the same variables and submit
+`training/rl/slurm/train_rl_dsh.sbatch`. Set `EVAL_INTERVAL` and `EVAL_DATA` to
+enable held-out validation. `text2sql.generate` launches one isolated harness
+subprocess per sample, preserves sampled token IDs/logprobs through an in-process
+OpenAI adapter, extracts final SQL, and computes binary execution reward against
+hidden result hashes.
+
+See [docs/rl.md](docs/rl.md) for the algorithm profiles and runtime contract.

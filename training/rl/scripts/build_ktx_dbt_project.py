@@ -12,9 +12,9 @@ fails, the agent never produces a tested query, and ``sql_reward`` returns 0.0
 with status ``no_sql``. A whole task pool can therefore score a clean,
 plausible-looking zero purely because its databases were never registered.
 
-The 1,800 Spider2-lite tasks use the 30 ``spider2-sqlite-*`` connections in the
-existing project, which lives in a **read-only** account. So this script copies
-that project into a writable location and appends one ``dbt-sqlite-<slug>``
+Spider2-lite tasks use the ``spider2-sqlite-*`` connections in the existing
+project. This script copies that project into a writable location and appends
+one ``dbt-sqlite-<slug>``
 connection per dbt database, with ``enabled_tables`` enumerated live from each
 file's ``sqlite_master``.
 

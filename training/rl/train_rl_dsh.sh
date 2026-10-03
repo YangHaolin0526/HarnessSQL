@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Portable Slime launcher for harness-in-the-loop SQL RL.
+# Portable production Slime launcher for harness-in-the-loop SQL RL.
 set -euo pipefail
 
-required=(SLIME_ROOT HF_CHECKPOINT REF_LOAD SAVE_DIR PROMPT_DATA MODEL_CONFIG_SCRIPT)
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+
+required=(SLIME_ROOT HF_CHECKPOINT REF_LOAD SAVE_DIR PROMPT_DATA)
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     echo "$name is required" >&2
@@ -10,7 +12,6 @@ for name in "${required[@]}"; do
   fi
 done
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 export PYTHONPATH="$repo_root/training/rl:$SLIME_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 for name in HARNESS_SQL_SYNTH_ROOT HARNESS_SQL_SPIDER_DB_DIR \
@@ -23,8 +24,10 @@ for name in HARNESS_SQL_SYNTH_ROOT HARNESS_SQL_SPIDER_DB_DIR \
 done
 
 ALGORITHM=${ALGORITHM:-grpo}
-ROLLOUT_CONTEXT_LEN=${ROLLOUT_CONTEXT_LEN:-16384}
-ROLLOUT_RESPONSE_LEN=${ROLLOUT_RESPONSE_LEN:-2048}
+MODEL_SIZE=${MODEL_SIZE:-qwen3_8b}
+SFT_CONTEXT_LEN=${SFT_CONTEXT_LEN:-8192}
+ROLLOUT_CONTEXT_LEN=${ROLLOUT_CONTEXT_LEN:-$SFT_CONTEXT_LEN}
+ROLLOUT_RESPONSE_LEN=${ROLLOUT_RESPONSE_LEN:-$((SFT_CONTEXT_LEN / 8))}
 ROLLOUT_BS=${ROLLOUT_BS:-4}
 N_SAMPLES=${N_SAMPLES:-8}
 NUM_STEPS_PER_ROLLOUT=${NUM_STEPS_PER_ROLLOUT:-2}
@@ -36,6 +39,27 @@ ROLLOUT_GPUS=${ROLLOUT_GPUS:-4}
 TP_SIZE=${TP_SIZE:-4}
 TRAIN_MAX_TOKENS=${TRAIN_MAX_TOKENS:-$ROLLOUT_CONTEXT_LEN}
 TOOL_CALL_PARSER=${TOOL_CALL_PARSER:-qwen25}
+
+case "$MODEL_SIZE" in
+  qwen3_8b)
+    MODEL_CONFIG_SCRIPT=${MODEL_CONFIG_SCRIPT:-$repo_root/training/rl/model_configs/qwen3-8B.sh}
+    TRAIN_GRAD_DTYPE=${TRAIN_GRAD_DTYPE:-fp32}
+    ;;
+  qwen3_14b)
+    MODEL_CONFIG_SCRIPT=${MODEL_CONFIG_SCRIPT:-$repo_root/training/rl/model_configs/qwen3-14B.sh}
+    TRAIN_GRAD_DTYPE=${TRAIN_GRAD_DTYPE:-bf16}
+    ;;
+  *) echo "MODEL_SIZE must be qwen3_8b or qwen3_14b" >&2; exit 2 ;;
+esac
+
+case "$SFT_CONTEXT_LEN" in
+  8192|16384|32768) ;;
+  *) echo "SFT_CONTEXT_LEN must be 8192, 16384, or 32768" >&2; exit 2 ;;
+esac
+
+if (( TRAIN_MAX_TOKENS < ROLLOUT_CONTEXT_LEN )); then
+  TRAIN_MAX_TOKENS=$ROLLOUT_CONTEXT_LEN
+fi
 
 if (( (ROLLOUT_BS * N_SAMPLES) % NUM_STEPS_PER_ROLLOUT != 0 )); then
   echo "ROLLOUT_BS*N_SAMPLES must be divisible by NUM_STEPS_PER_ROLLOUT" >&2
@@ -74,6 +98,24 @@ for path in "$SLIME_ROOT/train.py" "$HF_CHECKPOINT/config.json" \
   [[ -e "$path" ]] || { echo "missing required path: $path" >&2; exit 2; }
 done
 
+EVAL_ARGS=()
+if [[ "${EVAL_INTERVAL:-0}" != 0 ]]; then
+  if [[ -z "${EVAL_DATA:-}" || ! -s "$EVAL_DATA" ]]; then
+    echo "EVAL_DATA must name a non-empty JSONL/Parquet file when EVAL_INTERVAL is nonzero" >&2
+    exit 2
+  fi
+  case "$EVAL_DATA" in
+    *.jsonl|*.parquet) ;;
+    *) echo "EVAL_DATA must end in .jsonl or .parquet" >&2; exit 2 ;;
+  esac
+  EVAL_ARGS=(
+    --eval-prompt-data sqlval "$EVAL_DATA"
+    --eval-interval "$EVAL_INTERVAL"
+    --n-samples-per-eval-prompt "${N_SAMPLES_PER_EVAL_PROMPT:-1}"
+    --eval-max-concurrency "${SQL_EVAL_CONCURRENCY:-8}"
+  )
+fi
+
 if [[ -e "$SAVE_DIR/latest_checkpointed_iteration.txt" && "${ALLOW_RESUME:-0}" != 1 ]]; then
   echo "$SAVE_DIR already contains a run; set ALLOW_RESUME=1 to resume" >&2
   exit 2
@@ -94,6 +136,7 @@ export DSH_SQL_VLLM_CONTEXT=$ROLLOUT_CONTEXT_LEN
 source "$MODEL_CONFIG_SCRIPT"
 
 cd "$SLIME_ROOT"
+echo "HarnessSQL RL: algorithm=$ALGORITHM model=$MODEL_SIZE context=$ROLLOUT_CONTEXT_LEN response=$ROLLOUT_RESPONSE_LEN"
 python train.py \
   --actor-num-nodes 1 \
   --actor-num-gpus-per-node "$ACTOR_GPUS" \
@@ -152,4 +195,17 @@ python train.py \
   --adam-beta1 0.9 \
   --adam-beta2 0.98 \
   --rollout-num-gpus-per-engine "$ROLLOUT_GPUS" \
-  --sglang-tool-call-parser "$TOOL_CALL_PARSER"
+  --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION:-0.45}" \
+  --sglang-disable-custom-all-reduce \
+  --sglang-cuda-graph-max-bs "${SGLANG_CUDA_GRAPH_MAX_BS:-32}" \
+  --sglang-tool-call-parser "$TOOL_CALL_PARSER" \
+  --expert-model-parallel-size 1 \
+  --expert-tensor-parallel-size 1 \
+  --optimizer-cpu-offload \
+  --use-precision-aware-optimizer \
+  --main-grads-dtype "$TRAIN_GRAD_DTYPE" \
+  --attention-dropout 0.0 \
+  --hidden-dropout 0.0 \
+  --attention-softmax-in-fp32 \
+  --attention-backend flash \
+  "${EVAL_ARGS[@]}"

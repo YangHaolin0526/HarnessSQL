@@ -3,14 +3,10 @@
 Two independently synthesised sources, both in the same
 ``harness-aware-sqlite-task-v2`` row format:
 
-* **spider2 / sqlite** -- 1,800 tasks over the 30 Spider2-lite SQLite
-  databases, in ``artifacts/data_synthesis/sqlite/<batch>/validated/``:
-    candidate_200 (easy gate), candidate_harder_200 (hard gate),
-    candidate_target40_200, candidate_extra_hard_200,
-    candidate_target40_gpt56_500, candidate_frontier27b_gpt56_batch2
-* **dbt** -- 735 tasks over 49 dbt-project databases (15 per database), in
-  ``rl_run/data/dbt_sqlite/score20_30_per_db15/validated/``. These were used in
-  SFT and were missing from the first RL run.
+* **spider2 / sqlite** -- configurable synthesized batches over Spider2-lite
+  SQLite databases.
+* **dbt** -- configurable synthesized batches over DBT-derived SQLite
+  databases.
 
 The two differ in exactly two respects that matter here, and both are handled
 per-source rather than globally:
@@ -40,6 +36,11 @@ def _env_path(name: str) -> Path | None:
     return Path(value).expanduser().resolve() if value else None
 
 
+def _env_list(name: str, default: list[str]) -> list[str]:
+    value = os.environ.get(name, "")
+    return [part.strip() for part in value.split(",") if part.strip()] or default
+
+
 SYNTH = _env_path("HARNESS_SQL_SYNTH_ROOT")
 DB_DIR = _env_path("HARNESS_SQL_SPIDER_DB_DIR")
 DBT_SYNTH = _env_path("HARNESS_SQL_DBT_SYNTH_ROOT")
@@ -52,18 +53,8 @@ except ImportError:
     EvaluationSQLite = None
     canonical_json = None
 
-BATCHES = [
-    "candidate_200",
-    "candidate_harder_200",
-    "candidate_target40_200",
-    "candidate_extra_hard_200",
-    "candidate_target40_gpt56_500",
-    "candidate_frontier27b_gpt56_batch2",
-]
-
-DBT_BATCHES = [
-    "score20_30_per_db15",
-]
+BATCHES = _env_list("HARNESS_SQL_SYNTH_BATCHES", [])
+DBT_BATCHES = _env_list("HARNESS_SQL_DBT_BATCHES", [])
 
 # source -> (root holding <batch>/validated/pilot_tasks.jsonl, database dir,
 #            KTX connection-id prefix, default batch list)
@@ -116,7 +107,15 @@ def load_tasks(batches: list[str] | None = None,
         root = spec["root"]
         if root is None:
             raise RuntimeError(f"task root for {source!r} is not configured; see .env.example")
-        for batch in (batches or spec["batches"]):
+        selected_batches = batches or spec["batches"]
+        if not selected_batches:
+            selected_batches = sorted(
+                path.parent.parent.name
+                for path in Path(root).glob("*/validated/pilot_tasks.jsonl")
+            )
+        if not selected_batches:
+            raise FileNotFoundError(f"no validated task batches found under {root}")
+        for batch in selected_batches:
             p = Path(root) / batch / "validated" / "pilot_tasks.jsonl"
             if not p.exists():
                 raise FileNotFoundError(p)

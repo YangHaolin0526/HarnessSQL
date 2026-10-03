@@ -52,7 +52,7 @@ def test_load_and_reward_one_task(tmp_path, monkeypatch) -> None:
         "root": task_root,
         "db_dir": db_root,
         "conn_prefix": "spider2-sqlite-",
-        "batches": ["batch"],
+        "batches": [],
     })
     tasks = task_data.load_tasks(sources=["spider2"])
     assert len(tasks) == 1

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Convert selected DBT DSH session trajectories into ShareGPT packed format.
 
-Mirrors the parse_session_file logic in build_clean_dsh_datasets.py used for the
-spider2.0-lite 1800 dataset, so the two sides come out byte-for-byte the same shape:
+Uses the same packed conversation schema as the Spider2-derived task pipeline,
+so both sources have the same shape:
 
   [{ "id", "system", "conversations": [ {"from":"human"/"gpt", "value": ...} ... ] }]
 

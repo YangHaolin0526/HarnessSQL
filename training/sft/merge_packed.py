@@ -19,7 +19,7 @@ def main() -> int:
     args = parser.parse_args()
     dbt = json.loads(args.dbt.read_text(encoding="utf-8"))
     lite = json.loads(args.spider2.read_text(encoding="utf-8"))
-    print(f"dbt735: {len(dbt)} samples | spider2.0-lite: {len(lite)} samples", flush=True)
+    print(f"dbt: {len(dbt)} samples | spider2.0-lite: {len(lite)} samples", flush=True)
 
     # sanity: both share the exact same system prompt and conversation schema
     assert len(dbt) and len(lite), "one side is empty"
@@ -36,7 +36,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote {len(merged)} merged samples -> {args.output}", flush=True)
-    print(f"  dbt735:   {len(dbt)}", flush=True)
+    print(f"  dbt:      {len(dbt)}", flush=True)
     print(f"  lite:     {len(lite)}", flush=True)
     print(f"  total:    {len(merged)}", flush=True)
     return 0

@@ -3,13 +3,10 @@
 
 Replaces ``build_prompt_data.py`` for the second RL run. Two changes:
 
-* **Both pools.** The first run trained on the 1,800 Spider2-lite synth tasks
-  only; the 735 dbt tasks that SFT also saw were missing. ``load_tasks()`` now
-  returns both.
-* **Stratified holdout.** ``build_prompt_data.py --holdout N`` took the first N
-  rows after a global shuffle. On a merged pool that draws the validation set
-  in proportion to pool size (~71/29 here) and leaves the split to chance, so
-  the two sources are held out by explicit quota instead.
+* **Both pools.** ``load_tasks()`` returns the configured Spider2-lite and DBT
+  task batches rather than assuming one fixed dataset size.
+* **Stratified holdout.** The two sources are held out by explicit,
+  independently configurable quotas instead of relying on a global shuffle.
 
 ``metadata.sample_id`` is still the only field ``generate()`` consumes -- it
 looks the full task (db path, oracle hash, expected columns) back up from the
@@ -65,10 +62,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--shuffle-seed", type=int, default=1234)
-    ap.add_argument("--holdout-spider2", type=int, default=70)
-    ap.add_argument("--holdout-dbt", type=int, default=30)
-    ap.add_argument("--expect-spider2", type=int, default=1800)
-    ap.add_argument("--expect-dbt", type=int, default=735)
+    ap.add_argument("--holdout-spider2", type=int, default=0)
+    ap.add_argument("--holdout-dbt", type=int, default=0)
+    ap.add_argument("--expect-spider2", type=int, default=0,
+                    help="optional exact-count guard; 0 disables it")
+    ap.add_argument("--expect-dbt", type=int, default=0,
+                    help="optional exact-count guard; 0 disables it")
     ap.add_argument("--exclude", type=Path, nargs="*", default=[],
                     help="files of sample_ids to drop, one per line "
                          "(from scripts/replay_all_oracles.py)")
@@ -155,7 +154,7 @@ def main() -> int:
     describe("eval ", eval_rows)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    ep = args.out.with_suffix(args.out.suffix + ".eval")
+    ep = args.out.with_name(f"{args.out.stem}.eval{args.out.suffix}")
     ep.write_text("".join(json.dumps(row(t), ensure_ascii=False) + "\n" for t in eval_rows))
     args.out.write_text("".join(json.dumps(row(t), ensure_ascii=False) + "\n" for t in train_rows))
     print(f"\nwrote {len(eval_rows)} eval rows  -> {ep}")

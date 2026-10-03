@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one resumable DSH seed pass over the 735 dbt SQLite tasks."""
+"""Run one resumable dsh-sql seed pass over a DBT-derived SQLite task set."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from dsh_synth1800_pipeline import SynthTask, execute_sqlite_query, run_single_seed
+from collect_dsh_trajectories import SQLTask, execute_sqlite_query, run_single_seed
 
 
 def main() -> int:
@@ -40,7 +40,7 @@ def main() -> int:
     if args.limit:
         payload = payload[: args.limit]
     gold = {item["instance_id"]: item["gold_sql"] for item in payload}
-    tasks = [SynthTask(item["instance_id"], item["db_id"], item["question"]) for item in payload]
+    tasks = [SQLTask(item["instance_id"], item["db_id"], item["question"]) for item in payload]
     out = Path(args.out_dir).resolve()
     results_dir = out / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def main() -> int:
     db_dir = Path(args.db_dir).resolve()
     endpoint = args.base_url.rstrip("/") or f"http://127.0.0.1:{args.port}/v1"
 
-    def one(task: SynthTask) -> dict:
+    def one(task: SQLTask) -> dict:
         result_path = results_dir / f"{task.instance_id}.json"
         if result_path.exists():
             return json.loads(result_path.read_text())

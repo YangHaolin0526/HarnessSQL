@@ -1,4 +1,10 @@
-# HarnessSQL
+# HarnessSQL: Harness-Native Training for SQL Agents in Realistic Database Environments
+
+[![arXiv](https://img.shields.io/badge/arXiv-2610.12274-b31b1b.svg)](https://arxiv.org/abs/2610.12274)
+[![Paper PDF](https://img.shields.io/badge/Paper-PDF-blue.svg)](https://arxiv.org/pdf/2610.12274)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+
+This repository contains the official implementation of [HarnessSQL: Harness-Native Training for SQL Agents in Realistic Database Environments](https://arxiv.org/abs/2610.12274), available as an arXiv preprint.
 
 HarnessSQL is an end-to-end research codebase for harness-aware text-to-SQL:
 
@@ -169,3 +175,16 @@ OpenAI adapter, extracts final SQL, and computes binary execution reward against
 hidden result hashes.
 
 See [docs/rl.md](docs/rl.md) for the algorithm profiles and runtime contract.
+
+## Citation
+
+If you use this work, please cite:
+
+```bibtex
+@article{yang2026harnesssql,
+  title={HarnessSQL: Harness-Native Training for SQL Agents in Realistic Database Environments},
+  author={Haolin Yang and Jipeng Zhang and Zhiqiang Qian and Jian Xie and Shuaishuai Gong and Yike Guo and Sirui Han},
+  journal={arXiv preprint arXiv:2610.12274},
+  year={2026}
+}
+```
